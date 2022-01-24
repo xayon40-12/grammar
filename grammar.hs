@@ -65,15 +65,15 @@ pshow (name,g) = unlines . (\(_,_,_,i)->i) . top name . go id $ g
     go f (Err e) = box $ f $ "Error: " ++ show e
     go f (a :. b) = br (f ".") (go id a) (go id b)
     go f (a :+ b) = br (f "+") (go id a) (go id b)
-    go f (Star a) = go (\s->"["++s++"]") a
-    go f (Un a) = go (\s->"(|"++s++"|)") a
-    go f (a :# i) = go (++("#"++show i)) a
+    go f (Star a) = go (f.("["++).(++"]")) a
+    go f (Un a) = go (f.("(|"++).(++"|)")) a
+    go f (a :# i) = go (f.(++("#"++show i))) a
 
 pprint = putStrLn . pshow
 -- main
 
 main = do
-  let g0 =  [("S",(n "N" :. t "->" :. n "E" :. t "," :# 1) :. t ";")
+  let g0 =  [("S",s (n "N" :. t "->" :. n "E" :. t "," :# 1) :. t ";")
             ,("N",GNTer :# 2)
             ,("E",n "T" :. s (t "+" :. n "T" :# 3))
             ,("T",n "F" :. s (t "+" :. n "F" :# 4))
