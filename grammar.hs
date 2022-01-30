@@ -1,10 +1,11 @@
 #!/usr/bin/env runghc
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances, TupleSections #-}
 
 import Control.Monad
 import Data.Map (Map,(!),insert,toList,fromList,empty)
 import Data.List (isPrefixOf)
 import Data.Char
+import Data.Either
 
 data Rec = Ter | NTer deriving (Show)
 data Grammar t = Atom Rec t
@@ -20,7 +21,6 @@ data Grammar t = Atom Rec t
 infixl 5 :+
 infixl 6 :.
 infixl 7 :#
-
 
 t,n :: t -> Grammar t
 t t = Atom Ter t
@@ -82,13 +82,20 @@ gshow (name,g) = unlines . (\(_,_,_,i)->i) . top (pshow name) . go id $ g
 
 pprint = putStrLn . gshow
 
+type Input t = t
+type Search t = t
+type Output t = t
+type Delimiter t = t
+type Number t = t
+-- The (Maybe t) must be Nothing when the output is empty:
+-- for instance the empty list should not be returned as (Just []) but instead as (Nothing)
 class Extract t where
-  extract :: t -> t -> Either String (Maybe t) -- search second argument in first
-  extractTer :: t -> (Maybe t,Either String t)
-  extractNTer :: t -> (Maybe t,Either String t)
+  -- search second argument in begining of the first one and return what remains
+  extract :: Input t -> Search t -> Either String (Maybe (Output t))
+  extractTer :: Input t -> (Maybe (Output t),Either String t)
+  extractNTer :: Input t -> (Maybe (Output t),Either String t)
 
 type Env t = Map t (Grammar t)
-type ParseSEnv t = (Maybe t,SEnv t,[Grammar t])
 parse :: (Ord t, Extract t, Show t) => Env t -> Env t -> t -> t -> Either String (Env t)
 parse m r start t = case parse' m (r,Nothing) (m ! start) t [] of
   (_,_,[Err e]) -> Left e
@@ -96,7 +103,8 @@ parse m r start t = case parse' m (r,Nothing) (m ! start) t [] of
   (Just t1,_,_) -> Left $ "Parse did not reach end of input, remaining:\n\t" <> show t1
 
 type SEnv t = (Env t, Maybe t)
-parse' :: (Ord t, Extract t) => Env t -> SEnv t -> Grammar t -> t -> [Grammar t] -> ParseSEnv t
+type ParseSEnv t = (Maybe t,SEnv t,[Grammar t])
+parse' :: (Ord t, Extract t, Show t) => Env t -> SEnv t -> Grammar t -> t -> [Grammar t] -> ParseSEnv t
 parse' m r (Atom Ter a) t g = case extract t a of
   Left e -> (Just t,r,[Err e])
   Right t1 -> (t1,r,g)
@@ -137,10 +145,12 @@ parseRule 2 (t,r,gs) = (t,r,[Err $ "Rule 2 needs exactly one Atom stored, found 
 parseRule 3 g = app2 g 3 (:.)
 parseRule 4 g = app2 g 4 (:+)
 parseRule 5 g = g
-parseRule 6 (t,r,[g1]) = (t,r,[Star g1]) 
-parseRule 6 (t,r,gs) = (t,r,[Err $ "Rule 6 needs exactly one element parsed, found " <> show (length gs) <> "."]) 
-parseRule 7 (t,r,[g1]) = (t,r,[Un g1]) 
-parseRule 7 (t,r,gs) = (t,r,[Err $ "Rule 7 needs exactly one element parsed, found " <> show (length gs) <> "."]) 
+parseRule 6 (t,r,[g1]) = (t,r,[Star g1])
+parseRule 6 (t,r,gs) = (t,r,oneelem 6 gs)
+parseRule 7 (t,r,[g1]) = (t,r,[Un g1])
+parseRule 7 (t,r,gs) = (t,r,oneelem 7 gs)
+
+oneelem i gs = [Err $ "Rule " <> show i <> " needs exactly one element parsed, found " <> show (length gs) <> "."]
 
 app2 (t,r,[g1,g2]) _ op = (t,r,[op g1 g2])
 app2 (t,r,gs) i _ = (t,r,[Err $ "Rule " <> show i <> " needs exactly two elements already parsed, found " <> show (length gs) <> "."])
@@ -149,15 +159,18 @@ app2 (t,r,gs) i _ = (t,r,[Err $ "Rule " <> show i <> " needs exactly two element
 
 instance Extract String where
   extract c v | isPrefixOf v c = Right . toMaybe $ drop (length v) c
-              | otherwise = Left $ "In extract: Expected " <> show v <> ", found " <> show (take (length v) c) <> "."
+  extract c v = Left $ "In extract: Expected " <> show v <> ", found " <> show (take (length v) c) <> "."
+
   extractTer [] = (Nothing,Left "Empty list when extracting a terminal.")
   extractTer ('\'':cs) = case span (/='\'') cs of
-    (e:es,'\'':s) -> (toMaybe s, Right (e:es))
+    (e,'\'':s) -> (toMaybe s, Right e)
+    (e,_) -> (Nothing, Right e)
   extractTer (c:cs) = (Just (c:cs), Left $ "Expected a \"'\" to extract a terminal, found \"" <> [c] <> "\".")
+
   extractNTer [] = (Nothing,Left "Empty list when extracting a non terminal.")
   extractNTer (c:cs) | isAlpha c = case span ((||) <$> isAlpha <*> isDigit) cs of
-                                    (es,s) -> (toMaybe s, Right (c:es))
-                     | otherwise = (toMaybe cs,Left $ "Expected a capital letter to start a non terminal, found \"" <> [c] <> "\".")
+    (es,s) -> (toMaybe s, Right (c:es))
+  extractNTer (c:cs) = (toMaybe cs,Left $ "Expected a capital letter to start a non terminal, found \"" <> [c] <> "\".")
 
 toMaybe [] = Nothing
 toMaybe l = Just l
@@ -166,7 +179,6 @@ toMaybe l = Just l
 main = do
   let g0 = fromList [("S",s (n "N" :. t "->" :. n "E" :. t "," :# 1) :. t ";")
                     ,("N",GNTer :# 2)
-                    ,("R",GTer :. t "." :. GNTer :# 3)
                     ,("E",n "T" :. s (t "." :. n "T" :# 3))
                     ,("T",n "F" :. s (t "+" :. n "F" :# 4))
                     ,("F",GNTer :# 5 :+ GTer :# 5 :+ t "(" :. n "E" :. t ")" :+ t "[" :. n "E" :. t "]" :# 6 :+ t "(|" :. n "E" :. t "|)" :# 7)
